@@ -9,7 +9,15 @@ import logging
 
 import apache_beam as beam
 from apache_beam.io.gcp.bigquery import ReadFromBigQuery, WriteToBigQuery
-from apache_beam.options.pipeline_options import PipelineOptions
+from apache_beam.options.pipeline_options import GoogleCloudOptions, PipelineOptions
+
+# BigQuery schema for output table
+OUTPUT_SCHEMA = {
+    "fields": [
+        {"name": "state", "type": "STRING", "mode": "REQUIRED"},
+        {"name": "total_count", "type": "INTEGER", "mode": "REQUIRED"},
+    ]
+}
 
 
 def run(argv=None):
@@ -25,14 +33,14 @@ def run(argv=None):
         required=True,
         help="BigQuery table to write to (format: project:dataset.table)",
     )
-    parser.add_argument(
-        "--temp_location",
-        required=True,
-        help="GCS location for temporary files",
-    )
 
     known_args, pipeline_args = parser.parse_known_args(argv)
     pipeline_options = PipelineOptions(pipeline_args)
+
+    # Validate that temp_location is set in pipeline options
+    gcp_options = pipeline_options.view_as(GoogleCloudOptions)
+    if not gcp_options.temp_location:
+        parser.error("--temp_location is required in pipeline options")
 
     with beam.Pipeline(options=pipeline_options) as p:
         # Read from BigQuery public dataset
@@ -52,10 +60,9 @@ def run(argv=None):
         # Write results to BigQuery
         state_counts | "WriteToBigQuery" >> WriteToBigQuery(
             table=known_args.output_table,
-            schema="state:STRING,total_count:INTEGER",
+            schema=OUTPUT_SCHEMA,
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
             write_disposition=beam.io.BigQueryDisposition.WRITE_TRUNCATE,
-            custom_gcs_temp_location=known_args.temp_location,
         )
 
 
