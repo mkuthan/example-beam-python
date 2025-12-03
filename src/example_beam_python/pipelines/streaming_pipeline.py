@@ -1,7 +1,7 @@
 """Streaming pipeline using Pub/Sub.
 
-This pipeline reads from a Pub/Sub topic, performs windowed
-aggregations, and writes results to BigQuery.
+This pipeline reads from a Pub/Sub topic (e.g., NYC taxi rides stream),
+performs windowed aggregations, and writes results to BigQuery.
 """
 
 import argparse
@@ -17,14 +17,28 @@ from apache_beam.transforms.window import FixedWindows
 # BigQuery schema for output table
 OUTPUT_SCHEMA = {
     "fields": [
-        {"name": "key", "type": "STRING", "mode": "REQUIRED"},
-        {"name": "count", "type": "INTEGER", "mode": "REQUIRED"},
+        {"name": "ride_count", "type": "INTEGER", "mode": "REQUIRED"},
+        {"name": "avg_fare", "type": "FLOAT", "mode": "NULLABLE"},
+        {"name": "window_start", "type": "TIMESTAMP", "mode": "REQUIRED"},
     ]
 }
 
 
 def parse_message(message: bytes) -> dict | None:
-    """Parse a Pub/Sub message as JSON."""
+    """Parse a Pub/Sub message as JSON.
+
+    Expected message format (NYC taxi rides):
+    {
+        "ride_id": "...",
+        "point_idx": 0,
+        "latitude": 40.7...,
+        "longitude": -73.9...,
+        "timestamp": "2021-01-01T00:00:00",
+        "meter_reading": 1.5,
+        "meter_increment": 0.05,
+        "ride_status": "pickup"
+    }
+    """
     try:
         return json.loads(message.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -36,9 +50,14 @@ def run(argv=None):
     """Run the streaming pipeline."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--input_topic",
+        default="projects/pubsub-public-data/topics/taxirides-realtime",
+        help="Pub/Sub topic to read from (default: public NYC taxi rides topic)",
+    )
+    parser.add_argument(
         "--input_subscription",
-        required=True,
-        help="Pub/Sub subscription to read from (format: projects/project/subscriptions/subscription)",
+        help="Pub/Sub subscription to read from (format: projects/project/subscriptions/subscription). "
+        "If not provided, will use --input_topic with auto-created subscription.",
     )
     parser.add_argument(
         "--output_table",
@@ -64,10 +83,15 @@ def run(argv=None):
         parser.error("--temp_location is required in pipeline options")
 
     with beam.Pipeline(options=pipeline_options) as p:
-        # Read from Pub/Sub subscription
-        messages = p | "ReadFromPubSub" >> ReadFromPubSub(
-            subscription=known_args.input_subscription,
-        )
+        # Read from Pub/Sub topic or subscription
+        if known_args.input_subscription:
+            messages = p | "ReadFromPubSub" >> ReadFromPubSub(
+                subscription=known_args.input_subscription,
+            )
+        else:
+            messages = p | "ReadFromPubSub" >> ReadFromPubSub(
+                topic=known_args.input_topic,
+            )
 
         # Parse messages and apply windowing
         parsed = (
@@ -77,22 +101,39 @@ def run(argv=None):
             | "Window" >> beam.WindowInto(FixedWindows(known_args.window_size))
         )
 
-        # Count messages per window
-        windowed_counts = (
+        # Extract ride data and aggregate
+        windowed_stats = (
             parsed
-            | "AddKey" >> beam.Map(lambda _: ("message_count", 1))
-            | "CountPerWindow" >> beam.CombinePerKey(sum)
-            | "FormatOutput"
+            | "ExtractRideData"
+            >> beam.Map(
+                lambda ride: (
+                    1,
+                    {
+                        "ride_count": 1,
+                        "fare": ride.get("meter_reading", 0),
+                    },
+                )
+            )
+            | "AggregateStats"
+            >> beam.CombinePerKey(
+                lambda values: {
+                    "ride_count": sum(v["ride_count"] for v in values),
+                    "total_fare": sum(v["fare"] for v in values),
+                    "num_rides": len(values),
+                }
+            )
+            | "ComputeAverages"
             >> beam.Map(
                 lambda x: {
-                    "key": x[0],
-                    "count": x[1],
+                    "ride_count": x[1]["ride_count"],
+                    "avg_fare": x[1]["total_fare"] / x[1]["num_rides"] if x[1]["num_rides"] > 0 else 0,
+                    "window_start": beam.utils.timestamp.Timestamp.now().to_rfc3339(),
                 }
             )
         )
 
         # Write results to BigQuery
-        windowed_counts | "WriteToBigQuery" >> WriteToBigQuery(
+        windowed_stats | "WriteToBigQuery" >> WriteToBigQuery(
             table=known_args.output_table,
             schema=OUTPUT_SCHEMA,
             create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
