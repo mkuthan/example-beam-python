@@ -11,7 +11,7 @@ import logging
 import apache_beam as beam
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
 from apache_beam.io.gcp.pubsub import ReadFromPubSub
-from apache_beam.options.pipeline_options import GoogleCloudOptions, PipelineOptions, StandardOptions
+from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
 from apache_beam.transforms.window import FixedWindows
 
 # BigQuery schema for output table
@@ -57,17 +57,10 @@ def parse_message(message: bytes) -> dict | None:
 
 
 def run(argv=None):
-    """Run the streaming pipeline."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--input_topic",
-        default="projects/pubsub-public-data/topics/taxirides-realtime",
-        help="Pub/Sub topic to read from (default: public NYC taxi rides topic)",
-    )
-    parser.add_argument(
         "--input_subscription",
-        help="Pub/Sub subscription to read from (format: projects/project/subscriptions/subscription). "
-        "If not provided, will use --input_topic with auto-created subscription.",
+        help="Pub/Sub subscription to read from (format: projects/project/subscriptions/subscription). ",
     )
     parser.add_argument(
         "--output_table",
@@ -87,23 +80,11 @@ def run(argv=None):
     # Enable streaming mode
     pipeline_options.view_as(StandardOptions).streaming = True
 
-    # Validate that temp_location is set in pipeline options
-    gcp_options = pipeline_options.view_as(GoogleCloudOptions)
-    if not gcp_options.temp_location:
-        parser.error("--temp_location is required in pipeline options")
-
     with beam.Pipeline(options=pipeline_options) as p:
-        # Read from Pub/Sub topic or subscription
-        if known_args.input_subscription:
-            messages = p | "ReadFromPubSub" >> ReadFromPubSub(
-                subscription=known_args.input_subscription,
-            )
-        else:
-            messages = p | "ReadFromPubSub" >> ReadFromPubSub(
-                topic=known_args.input_topic,
-            )
+        messages = p | "ReadFromPubSub" >> ReadFromPubSub(
+            subscription=known_args.input_subscription,
+        )
 
-        # Parse messages and apply windowing
         parsed = (
             messages
             | "ParseMessages" >> beam.Map(parse_message)
@@ -111,7 +92,6 @@ def run(argv=None):
             | "Window" >> beam.WindowInto(FixedWindows(known_args.window_size))
         )
 
-        # Extract ride data and aggregate
         windowed_stats = (
             parsed
             | "ExtractRideData"
@@ -135,7 +115,6 @@ def run(argv=None):
             )
         )
 
-        # Write results to BigQuery
         windowed_stats | "WriteToBigQuery" >> WriteToBigQuery(
             table=known_args.output_table,
             schema=OUTPUT_SCHEMA,

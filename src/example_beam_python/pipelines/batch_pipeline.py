@@ -9,7 +9,7 @@ import logging
 
 import apache_beam as beam
 from apache_beam.io.gcp.bigquery import ReadFromBigQuery, WriteToBigQuery
-from apache_beam.options.pipeline_options import GoogleCloudOptions, PipelineOptions
+from apache_beam.options.pipeline_options import PipelineOptions
 
 # BigQuery schema for output table
 OUTPUT_SCHEMA = {
@@ -37,19 +37,12 @@ def run(argv=None):
     known_args, pipeline_args = parser.parse_known_args(argv)
     pipeline_options = PipelineOptions(pipeline_args)
 
-    # Validate that temp_location is set in pipeline options
-    gcp_options = pipeline_options.view_as(GoogleCloudOptions)
-    if not gcp_options.temp_location:
-        parser.error("--temp_location is required in pipeline options")
-
     with beam.Pipeline(options=pipeline_options) as p:
-        # Read from BigQuery public dataset
         names = p | "ReadFromBigQuery" >> ReadFromBigQuery(
             table=known_args.input_table,
             use_standard_sql=True,
         )
 
-        # Aggregate names by state and calculate total count
         state_counts = (
             names
             | "ExtractStateAndCount" >> beam.Map(lambda row: (row["state"], row["number"]))
@@ -57,7 +50,6 @@ def run(argv=None):
             | "FormatOutput" >> beam.Map(lambda x: {"state": x[0], "total_count": x[1]})
         )
 
-        # Write results to BigQuery
         state_counts | "WriteToBigQuery" >> WriteToBigQuery(
             table=known_args.output_table,
             schema=OUTPUT_SCHEMA,
