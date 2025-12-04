@@ -357,7 +357,7 @@ wheels = [
 [[package]]
 name = "example-beam-python"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "apache-beam", extra = ["gcp"] },
 ]

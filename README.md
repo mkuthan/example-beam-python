@@ -40,7 +40,9 @@ uv run python -m example_beam_python.pipelines.batch_pipeline \
     --project=$GCP_PROJECT_ID \
     --region=$GCP_REGION \
     --runner=DataflowRunner \
-    --no_use_public_ips
+    --no_use_public_ips \
+    --machine_type=t2d-standard-2 \
+    --max_num_workers=2
 ```
 
 ### Streaming Pipeline
@@ -63,6 +65,9 @@ uv run python -m example_beam_python.pipelines.streaming_pipeline \
     --project=$GCP_PROJECT_ID \
     --region=$GCP_REGION \
     --runner=DataflowRunner \
-    --no_use_public_ips
+    --no_use_public_ips \
+    --enable_streaming_engine \
+    --machine_type=t2d-standard-2 \
+    --max_num_workers=2
 ```
 

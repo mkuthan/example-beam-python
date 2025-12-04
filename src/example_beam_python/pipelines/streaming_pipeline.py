@@ -24,6 +24,16 @@ OUTPUT_SCHEMA = {
 }
 
 
+def aggregate_stats(values):
+    """Aggregate ride statistics from values."""
+    values_list = list(values)
+    return {
+        "ride_count": sum(v.get("ride_count", 0) for v in values_list),
+        "total_fare": sum(v.get("fare", 0) for v in values_list),
+        "num_rides": len(values_list),
+    }
+
+
 def parse_message(message: bytes) -> dict | None:
     """Parse a Pub/Sub message as JSON.
 
@@ -114,14 +124,7 @@ def run(argv=None):
                     },
                 )
             )
-            | "AggregateStats"
-            >> beam.CombinePerKey(
-                lambda values: {
-                    "ride_count": sum(v["ride_count"] for v in values),
-                    "total_fare": sum(v["fare"] for v in values),
-                    "num_rides": len(values),
-                }
-            )
+            | "AggregateStats" >> beam.CombinePerKey(aggregate_stats)
             | "ComputeAverages"
             >> beam.Map(
                 lambda x: {
